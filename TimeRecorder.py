@@ -6,7 +6,6 @@ import os.path
 from argparse import ArgumentParser
 import configparser
 from datetime import datetime
-from textwrap import dedent
 import sqlite3
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
@@ -15,8 +14,7 @@ from selenium.webdriver.common.by import By
 
 
 def get_argparser():
-    parser = ArgumentParser(description=dedent("""\
-       勤之助で出退勤の打刻を行います。"""))
+    parser = ArgumentParser(description=dedent("""勤之助で出退勤の打刻を行います。"""))
     parser.add_argument('record_type', metavar='IN|OUT', type=str,
                         help="""出勤か退勤を指定します。指定可能な値は'IN', 'OUT'のいずれかです [IN:出勤, OUT:退勤]""")
     parser.add_argument('--hide-browser', dest='hide_browser', action='store_true', default=False,
@@ -31,11 +29,11 @@ def get_argparser():
     return parser
 
 
-def get_id_password(config_file):
+def get_kinnosuke_config(config_file):
     config = configparser.ConfigParser()
     config.read(config_file)
     kinnosuke_conf = config['Kinnosuke']
-    return (kinnosuke_conf['ID'], kinnosuke_conf['PASSWORD'])
+    return (kinnosuke_conf['ID'], kinnosuke_conf['PASSWORD'], kinnosuke_conf['URL'])
 
 
 def get_selenium_config(config_file):
@@ -122,18 +120,19 @@ class TimeRecordDbManagaer:
 
 
 class KinnosukeAutomator:
-    TOPPAGE_URL = 'https://www.4628.jp/xxxx/'
-    TIMETABLE_URL = TOPPAGE_URL + '?module=timesheet&action=browse'
     WAIT_SECONDS = 10
 
-    def __init__(self, id, password, browser='Chrome', executable_path='', hide_browser=False):
+    def __init__(self, id, password, browser='Chrome', executable_path='', toppage_url='https://www.4628.jp/', hide_browser=False):
         
         if browser.upper() == 'FIREFOX':
             self.__driver = self.get_gecko_driver(executable_path, hide_browser)
         else:
             self.__driver = self.get_chrome_driver(executable_path, hide_browser)
 
-        self.__driver.get(self.TOPPAGE_URL)
+        self.toppage_url = toppage_url
+        self.timetable_url = toppage_url + '?module=timesheet&action=browse'
+
+        self.__driver.get(self.toppage_url)
         # ログインボタンが表示されるまで待機
         WebDriverWait(self.__driver, self.WAIT_SECONDS).until(EC.presence_of_element_located((By.ID, 'id_passlogin')))
 
@@ -166,7 +165,7 @@ class KinnosukeAutomator:
             return webdriver.Firefox(options=options, executable_path=executable_path)
 
     def get_thismonth_holidays(self):
-        self.__driver.get(self.TIMETABLE_URL)
+        self.__driver.get(self.timetable_url)
         # ページフッターが表示されるまで待機
         WebDriverWait(self.__driver, self.WAIT_SECONDS).until(EC.presence_of_element_located((By.ID, 'footer')))
 
@@ -183,7 +182,7 @@ class KinnosukeAutomator:
 
     def clock_in(self):
         XPATH_FOR_CLOCK_IN = '//*[@id="timerecorder_txt" and (starts-with(text(), "出社") or starts-with(text(), "In"))]'
-        self.__driver.get(self.TOPPAGE_URL)
+        self.__driver.get(self.toppage_url)
         # ページフッターが表示されるまで待機
         WebDriverWait(self.__driver, self.WAIT_SECONDS).until(EC.presence_of_element_located((By.ID, 'footer')))
 
@@ -203,7 +202,7 @@ class KinnosukeAutomator:
 
     def clock_out(self):
         XPATH_FOR_CLOCK_OUT = '//*[@id="timerecorder_txt" and (starts-with(text(), "退社") or starts-with(text(), "Out"))]'
-        self.__driver.get(self.TOPPAGE_URL)
+        self.__driver.get(self.toppage_url)
         # ページフッターが表示されるまで待機
         WebDriverWait(self.__driver, self.WAIT_SECONDS).until(EC.presence_of_element_located((By.ID, 'footer')))
 
@@ -225,26 +224,26 @@ class KinnosukeAutomator:
         self.__driver.quit()
 
 
-def clock_in(mgr, id, password, browser, executable_path, hide_browser):
+def clock_in(mgr, id, password, browser, executable_path, url, hide_browser):
     if mgr.has_clock_in() or mgr.is_holiday():
         return
-    automator = init_automator(mgr, id, password, browser, executable_path, hide_browser)
+    automator = init_automator(mgr, id, password, browser, executable_path, url, hide_browser)
     if automator.clock_in():
         mgr.clock_in()
     automator.quit()
 
 
-def clock_out(mgr, id, password, browser, executable_path, hide_browser):
+def clock_out(mgr, id, password, browser, executable_path, url, hide_browser):
     if mgr.has_clock_out() or mgr.is_holiday():
         return
-    automator = init_automator(mgr, id, password, browser, executable_path, hide_browser)
+    automator = init_automator(mgr, id, password, browser, executable_path, url, hide_browser)
     if automator.clock_out():
         mgr.clock_out()
     automator.quit()
 
 
-def init_automator(mgr, id, password, browser, executable_path, hide_browser):
-    automator = KinnosukeAutomator(id, password, browser, executable_path, hide_browser)
+def init_automator(mgr, id, password, browser, executable_path, url, hide_browser):
+    automator = KinnosukeAutomator(id, password, browser, executable_path, url, hide_browser)
 
     if not mgr.has_initialized_thismonth_holidays():
         holidays = automator.get_thismonth_holidays()
@@ -257,12 +256,12 @@ if __name__ == '__main__':
     args = argparser.parse_args()
 
     mgr = TimeRecordDbManagaer(args.sqlite3)
-    (id, password) = get_id_password(args.config)
+    (id, password, url) = get_id_password(args.config)
     (browser, executable_path) = get_selenium_config(args.config)
     if args.record_type == 'IN':
-        clock_in(mgr, id, password, browser, executable_path, args.hide_browser)
+        clock_in(mgr, id, password, browser, executable_path, url, args.hide_browser)
     elif args.record_type == 'OUT':
-        clock_out(mgr, id, password, browser, executable_path, args.hide_browser)
+        clock_out(mgr, id, password, browser, executable_path, url, args.hide_browser)
     else:
         print("Error: '{record_type}' is invalid argument.".format(record_type=args.record_type), file=sys.stderr)
         argparser.print_usage()
